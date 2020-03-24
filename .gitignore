@@ -1,1 +1,7 @@
 _*
+
+# mac finder files
+*.DS_store
+
+# ignore folders created by pip during editable install
+*.egg-info

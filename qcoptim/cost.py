@@ -22,6 +22,8 @@ import pdb
 #import itertools as it
 pi =np.pi
 
+from qiskit.aqua.operators import WeightedPauliOperator, TPBGroupedWeightedPauliOperator
+
 
 class Cost():
     """
@@ -136,7 +138,28 @@ class Cost():
         """ To be implemented in the subclasses """
         raise NotImplementedError()
 
-    
+
+class CostWeightedOps(Cost):
+
+    def __init__(self, 
+                 ansatz, 
+                 instance, 
+                 nb_params,
+                 operators,
+                 **kwargs,
+                ):
+        """ """
+
+        # check type of passed operators
+        if not type(operators) is WeightedPauliOperator:
+            raise TypeError
+
+        self.weighted_operators = operators
+        N = operators.num_qubits # infer number of qubits
+
+        # call Cost __init__
+        super(CostWeightedOps,self).__init__(ansatz,N,instance,
+                                             nb_params,**kwargs)
 
 # Subclasses: GHZ related costs
 class GHZPauliCost(Cost):
