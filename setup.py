@@ -18,7 +18,6 @@ setup(
     keywords='',
     packages=find_packages(exclude=['docs', 'tests']),
     install_requires=[
-        'pdb',
         'numpy',
         'tensorflow',
         'qiskit',

@@ -1,10 +1,14 @@
 
 # list of * contents
 __all__ = ['ParameterisedAnsatz',
-           'RandomAnsatz']
+           'RandomAnsatz',
+           'RegularXYZAnsatz',
+           'RegularU3Ansatz',
+           ]
 
 import random
 import qiskit as qk
+import numpy as np
 
 class ParameterisedAnsatz(object):
     """ """
@@ -110,5 +114,108 @@ class RandomAnsatz(ParameterisedAnsatz):
             if needs_rgate[i]:
                 (single_qubit_gates[random.randint(0,2)])(self.params[param_counter],i)
                 param_counter += 1
+        
+        return qc
+
+class RegularXYZAnsatz(ParameterisedAnsatz):
+    """ """
+
+    def _generate_params(self):
+        """ """
+        nb_params = self.num_qubits*self.depth
+        name_params = ['R'+str(i) for i in range(nb_params)]
+        return [qk.circuit.Parameter(n) for n in name_params]
+
+    def _generate_circuit(self):
+        """ """
+
+        N = self.num_qubits
+        barriers = True
+        
+        qc = qk.QuantumCircuit(N)
+        
+        egate = qc.cx # entangle with CNOTs
+        single_qubit_gate_sequence = [qc.rx,qc.ry,qc.rz] # eisert scheme alternates RX, RY, RZ 
+        
+        # initial round in the Eisert scheme is fixed RY rotations at 
+        # angle pi/4
+        qc.ry(np.pi/4,range(N))
+        l,r = 2*np.arange(N//2),2*np.arange(N//2)+1
+        if len(l)==1:
+            egate(l[0],r[0])
+        elif len(l)>1:
+            egate(l,r)
+        l,r = 2*np.arange(N//2-1+(N%2))+1,2*np.arange(N//2-1+(N%2))+2
+        if len(l)==1:
+            egate(l[0],r[0])
+        elif len(l)>1:
+            egate(l,r)
+        if barriers:
+            qc.barrier()
+        
+        param_counter = 0
+        for r in range(self.depth):
+
+            # add parameterised single qubit rotations
+            for q in range(N):
+                gate = single_qubit_gate_sequence[r % len(single_qubit_gate_sequence)]
+                gate(self.params[param_counter],q)
+                param_counter += 1
+
+            # add entangling gates
+            l,r = 2*np.arange(N//2),2*np.arange(N//2)+1
+            if len(l)==1:
+                egate(l[0],r[0])
+            elif len(l)>1:
+                egate(l,r)
+            l,r = 2*np.arange(N//2-1+(N%2))+1,2*np.arange(N//2-1+(N%2))+2
+            if len(l)==1:
+                egate(l[0],r[0])
+            elif len(l)>1:
+                egate(l,r)
+            if barriers:
+                qc.barrier()
+        
+        return qc
+
+class RegularU3Ansatz(ParameterisedAnsatz):
+    """ """
+
+    def _generate_params(self):
+        """ """
+        nb_params = self.num_qubits*self.depth*3
+        name_params = ['R'+str(i) for i in range(nb_params)]
+        return [qk.circuit.Parameter(n) for n in name_params]
+
+    def _generate_circuit(self):
+        """ """
+
+        N = self.num_qubits
+        barriers = True
+        egate = qc.cx # entangle with CNOTs
+        
+        qc = qk.QuantumCircuit(N)
+
+        param_counter = 0
+        for r in range(self.depth):
+
+            # add parameterised single qubit rotations
+            for q in range(N):
+                qc.u3(*[self.params[param_counter+i] for i in range(3)],q)
+                param_counter += 3
+
+            # add entangling gates
+            l,r = 2*np.arange(N//2),2*np.arange(N//2)+1
+            if len(l)==1:
+                egate(l[0],r[0])
+            elif len(l)>1:
+                egate(l,r)
+            l,r = 2*np.arange(N//2-1+(N%2))+1,2*np.arange(N//2-1+(N%2))+2
+            if len(l)==1:
+                egate(l[0],r[0])
+            elif len(l)>1:
+                egate(l,r)
+            if barriers:
+                qc.barrier()
         
         return qc

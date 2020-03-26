@@ -44,37 +44,36 @@ class CostWeightedOps(object):
             wave_function=self.ansatz.circuit,
             statevector_mode=self.instance.is_statevector)
         self._t_measurement_circuits = self.instance.transpile(measurement_circuits)
+        self.num_circuits = len(self._t_measurement_circuits)
 
     def __call__(self, params_values, debug=False):
         """ Estimate the CostFunction for some parameters"""
         if debug: pdb.set_trace()
-        if np.ndim(params_values) > 1 :
-            mean = np.array([self.__call__(p) for p in params_values])
-        else:
-            # bind the values of the parameters to the circuit
-            bound_circs = _bind_params(self._t_measurement_circuits, params_values, self.ansatz.params)
+
+        if np.ndim(params_values)==1:
+            params_values = [params_values]
+
+        # package and bind circuits
+        bound_circs = []
+        for pidx,p in enumerate(params_values):
+            for cc in self._t_measurement_circuits:
+                tmp = cc.bind_parameters(dict(zip(self.ansatz.params, p)))
+                tmp.name = str(pidx) + tmp.name
+                bound_circs.append(tmp)
             
-            # See if one can add a noise model here and the number of parameters
-            results = self.instance.execute(bound_circs, had_transpiled=self.fix_transpile)
-            if self._keep_res: self._res.append(results.to_dict())
+        # See if one can add a noise model here and the number of parameters
+        results = self.instance.execute(bound_circs, had_transpiled=self.fix_transpile)
+        if self._keep_res: self._res.append(results.to_dict())
             
-            # evaluate mean value of sum of grouped_weighted_operators from results
+        # evaluate mean value of sum of grouped_weighted_operators from results
+        means = []
+        for pidx,p in enumerate(params_values):
             mean,std = self.grouped_weighted_operators.evaluate_with_result(
-                results,statevector_mode=self.instance.is_statevector)
+                results,statevector_mode=self.instance.is_statevector,circuit_name_prefix=str(pidx))
+            means.append(mean)
 
-            if self.verbose: print(mean)
-        return np.squeeze(mean) 
-
-def _bind_params(circ, param_values, param_variables):
-    """ Take a list of circuits with bindable parameters and bind the values 
-    passed according to the param_variables
-    Returns the list of circuits with bound values DOES NOT MODIFY INPUT
-    (i.e. hardware details??)
-    """
-    if type(circ) != list: 
-        circ = [circ]
-    bound_circ = [cc.bind_parameters(dict(zip(param_variables, param_values))) for cc in circ]
-    return bound_circ  
+        if self.verbose: print(means)
+        return np.array([np.squeeze(means)]).T
 
 
 if __name__ == '__main__':    
