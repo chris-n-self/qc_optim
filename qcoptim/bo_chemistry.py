@@ -1,4 +1,10 @@
 
+__all__ = [
+    'get_H2_qubit_op',
+    'get_LiH_qubit_op',
+    'run_BO_vqe',
+]
+
 import GPyOpt
 import numpy as np
 
@@ -11,7 +17,7 @@ from qiskit.aqua import QuantumInstance
 from qiskit.aqua.operators import WeightedPauliOperator as wpo
 from qiskit.aqua.algorithms import ExactEigensolver
 
-from .cost_weighted_ops import *
+from .cost import *
 from .ansatz import *
 from . import utilities as ut
 
