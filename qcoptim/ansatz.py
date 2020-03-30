@@ -1,10 +1,11 @@
 
 # list of * contents
-__all__ = ['ParameterisedAnsatz',
-           'RandomAnsatz',
-           'RegularXYZAnsatz',
-           'RegularU3Ansatz',
-           ]
+__all__ = [
+    'ParameterisedAnsatz',
+    'RandomAnsatz',
+    'RegularXYZAnsatz',
+    'RegularU3Ansatz',
+]
 
 import random
 import qiskit as qk
@@ -122,7 +123,7 @@ class RegularXYZAnsatz(ParameterisedAnsatz):
 
     def _generate_params(self):
         """ """
-        nb_params = self.num_qubits*self.depth
+        nb_params = self.num_qubits*(self.depth+1)
         name_params = ['R'+str(i) for i in range(nb_params)]
         return [qk.circuit.Parameter(n) for n in name_params]
 
@@ -176,6 +177,12 @@ class RegularXYZAnsatz(ParameterisedAnsatz):
             if barriers:
                 qc.barrier()
         
+        # add final round of parameterised single qubit rotations
+        for q in range(N):
+            gate = single_qubit_gate_sequence[self.depth % len(single_qubit_gate_sequence)]
+            gate(self.params[param_counter],q)
+            param_counter += 1
+
         return qc
 
 class RegularU3Ansatz(ParameterisedAnsatz):
@@ -183,7 +190,7 @@ class RegularU3Ansatz(ParameterisedAnsatz):
 
     def _generate_params(self):
         """ """
-        nb_params = self.num_qubits*self.depth*3
+        nb_params = self.num_qubits*(self.depth+1)*3
         name_params = ['R'+str(i) for i in range(nb_params)]
         return [qk.circuit.Parameter(n) for n in name_params]
 
@@ -192,9 +199,10 @@ class RegularU3Ansatz(ParameterisedAnsatz):
 
         N = self.num_qubits
         barriers = True
-        egate = qc.cx # entangle with CNOTs
         
         qc = qk.QuantumCircuit(N)
+
+        egate = qc.cx # entangle with CNOTs
 
         param_counter = 0
         for r in range(self.depth):
@@ -217,5 +225,10 @@ class RegularU3Ansatz(ParameterisedAnsatz):
                 egate(l,r)
             if barriers:
                 qc.barrier()
+
+        # add final round of parameterised single qubit rotations
+        for q in range(N):
+            qc.u3(*[self.params[param_counter+i] for i in range(3)],q)
+            param_counter += 3
         
         return qc

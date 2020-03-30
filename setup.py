@@ -19,7 +19,7 @@ setup(
     packages=find_packages(exclude=['docs', 'tests']),
     install_requires=[
         'numpy',
-        'tensorflow',
+        'GPyOpt',
         'qiskit',
     ],
     extras_require={  # Optional

@@ -16,6 +16,10 @@ Choice of noise_models, initial_layouts, nb_shots, etc.. is done through the
 quantum instance passed when initializing a Cost, i.e. it is outside of the
 scope of the classes here
 """
+__all__ = [
+    'CostWeightedOps',
+]
+
 import qiskit as qk
 import numpy as np
 import pdb
@@ -23,6 +27,72 @@ import pdb
 pi =np.pi
 
 from qiskit.aqua.operators import WeightedPauliOperator, TPBGroupedWeightedPauliOperator
+
+
+class CostWeightedOps(object):
+
+    def __init__(self, 
+                 ansatz, 
+                 instance, 
+                 operators,
+                 fix_transpile=True,
+                 keep_res=True, 
+                 verbose=True, 
+                 noise_model=None,
+                 debug=False,
+                 **kwargs,
+                ):
+        """ """
+        if debug: pdb.set_trace()
+        self.ansatz = ansatz
+        self.instance = instance
+        self.fix_transpile = fix_transpile
+        self.verbose = verbose
+        self._keep_res = keep_res
+        self._res = []
+
+        # check type of passed operators
+        if not type(operators) is WeightedPauliOperator:
+            raise TypeError
+        # store operators in grouped form, currently use `unsorted_grouping` method, which
+        # is a greedy method. Sorting method could be controlled with a kwarg
+        self.grouped_weighted_operators = TPBGroupedWeightedPauliOperator.unsorted_grouping(operators)
+
+        # generate and transpile measurement circuits
+        measurement_circuits = self.grouped_weighted_operators.construct_evaluation_circuit(
+            wave_function=self.ansatz.circuit,
+            statevector_mode=self.instance.is_statevector)
+        self._t_measurement_circuits = self.instance.transpile(measurement_circuits)
+        self.num_circuits = len(self._t_measurement_circuits)
+
+    def __call__(self, params_values, debug=False):
+        """ Estimate the CostFunction for some parameters"""
+        if debug: pdb.set_trace()
+
+        if np.ndim(params_values)==1:
+            params_values = [params_values]
+
+        # package and bind circuits
+        bound_circs = []
+        for pidx,p in enumerate(params_values):
+            for cc in self._t_measurement_circuits:
+                tmp = cc.bind_parameters(dict(zip(self.ansatz.params, p)))
+                tmp.name = str(pidx) + tmp.name
+                bound_circs.append(tmp)
+            
+        # See if one can add a noise model here and the number of parameters
+        results = self.instance.execute(bound_circs, had_transpiled=self.fix_transpile)
+        if self._keep_res: self._res.append(results.to_dict())
+            
+        # evaluate mean value of sum of grouped_weighted_operators from results
+        means = []
+        for pidx,p in enumerate(params_values):
+            mean,std = self.grouped_weighted_operators.evaluate_with_result(
+                results,statevector_mode=self.instance.is_statevector,circuit_name_prefix=str(pidx))
+            means.append(mean)
+
+        if self.verbose: print(means)
+        return np.array([np.squeeze(means)]).T
 
 
 class Cost():
@@ -138,28 +208,6 @@ class Cost():
         """ To be implemented in the subclasses """
         raise NotImplementedError()
 
-
-class CostWeightedOps(Cost):
-
-    def __init__(self, 
-                 ansatz, 
-                 instance, 
-                 nb_params,
-                 operators,
-                 **kwargs,
-                ):
-        """ """
-
-        # check type of passed operators
-        if not type(operators) is WeightedPauliOperator:
-            raise TypeError
-
-        self.weighted_operators = operators
-        N = operators.num_qubits # infer number of qubits
-
-        # call Cost __init__
-        super(CostWeightedOps,self).__init__(ansatz,N,instance,
-                                             nb_params,**kwargs)
 
 # Subclasses: GHZ related costs
 class GHZPauliCost(Cost):
