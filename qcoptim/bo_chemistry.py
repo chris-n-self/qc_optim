@@ -141,13 +141,15 @@ def run_BO_vqe(dist,
 
     # get initial values using bigshots
     if nb_init=='max':
-        _nb_init = 4*900//cost_fewshots.num_circuits
+        _nb_init = init_jobs*900//cost_fewshots.num_circuits
     else:
         _nb_init = nb_init
+    if verbose: print('initialising...')
     x_init = 2*np.pi*np.random.random(_nb_init*ansatz.nb_params).reshape((_nb_init,ansatz.nb_params))
     y_init = cost_fewshots(x_init)
     
     # optim
+    if verbose: print('optimising...')
     Bopt = GPyOpt.methods.BayesianOptimization(cost_bo, 
                                                X=x_init, 
                                                Y=y_init, 
