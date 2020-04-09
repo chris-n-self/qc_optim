@@ -26,6 +26,7 @@ from .bo_chemistry import (
     get_H2_qubit_op,
     get_LiH_qubit_op,
     run_BO_vqe,
+    run_BO_vqe_parallel,
 )
 
 __all__ = [
@@ -46,4 +47,5 @@ __all__ = [
     'get_H2_qubit_op',
     'get_LiH_qubit_op',
     'run_BO_vqe',
+    'run_BO_vqe_parallel',
 ]
