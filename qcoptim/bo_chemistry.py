@@ -7,21 +7,23 @@ __all__ = [
     'run_BO_vqe_parallel',
 ]
 
+import copy
 import time
 import json
 import GPyOpt
 import numpy as np
 
+# qiskit core and execution objects
+from qiskit import Aer, execute, transpile, QuantumCircuit
+from qiskit.aqua import QuantumInstance
+from qiskit.aqua.algorithms import ExactEigensolver
+# qiskit chemistry objects
 from qiskit.chemistry import FermionicOperator
 from qiskit.chemistry.drivers import PySCFDriver, UnitsType
-from qiskit.aqua.operators import Z2Symmetries
-
-from qiskit import Aer, execute, transpile, QuantumCircuit
+# qiskit operator objects
 from qiskit.quantum_info import Pauli
-from qiskit.aqua import QuantumInstance
 from qiskit.aqua.operators import WeightedPauliOperator as wpo
-from qiskit.aqua.operators import TPBGroupedWeightedPauliOperator
-from qiskit.aqua.algorithms import ExactEigensolver
+from qiskit.aqua.operators import TPBGroupedWeightedPauliOperator, Z2Symmetries
 
 from .cost import *
 from .ansatz import *
@@ -40,10 +42,6 @@ def get_H2_qubit_op(dist):
     -------
     qubitOp : qiskit.aqua.operators.WeightedPauliOperator
         Qiskit representation of the qubit Hamiltonian
-    num_particles : int
-        Number of electrons that are not frozen
-    num_spin_orbitals : int
-        Number of spin orbitals (2x atomic orbitals) that are not frozen
     shift : float
         The ground state of the qubit Hamiltonian needs to be corrected by this amount of
         energy to give the real physical energy. This includes the replusive energy between
@@ -64,7 +62,7 @@ def get_H2_qubit_op(dist):
     qubitOp = Z2Symmetries.two_qubit_reduction(qubitOp,num_particles)
     shift = repulsion_energy
 
-    return qubitOp, num_particles, num_spin_orbitals, shift
+    return qubitOp, shift
 
 def get_LiH_qubit_op(dist):
     """ 
@@ -79,10 +77,6 @@ def get_LiH_qubit_op(dist):
     -------
     qubitOp : qiskit.aqua.operators.WeightedPauliOperator
         Qiskit representation of the qubit Hamiltonian
-    num_particles : int
-        Number of electrons that are not frozen
-    num_spin_orbitals : int
-        Number of spin orbitals (2x atomic orbitals) that are not frozen
     shift : float
         The ground state of the qubit Hamiltonian needs to be corrected by this amount of
         energy to give the real physical energy. This includes the replusive energy between
@@ -116,13 +110,14 @@ def get_LiH_qubit_op(dist):
     qubitOp = Z2Symmetries.two_qubit_reduction(qubitOp,num_particles)
     shift = repulsion_energy + energy_shift
 
-    return qubitOp, num_particles, num_spin_orbitals, shift
+    return qubitOp, shift
 
 def get_TFIM_qubit_op(
     N,
     B,
     J=1,
     pbc=False,
+    resolve_degeneracy=False,
     ):
     """ 
     Construct the qubit Hamiltonian for 1d TFIM: H = \sum_{i} ( J Z_i Z_{i+1} + B X_i ), 
@@ -138,32 +133,36 @@ def get_TFIM_qubit_op(
         Ising interaction strength
     pbc : boolean, optional default False
         Set the boundary conditions of the 1d spin chain
+    resolve_degeneracy : boolean, optional default False
+        Lift the ground state degeneracy when |B*J| < 1 with a small Z field
 
     Returns
     -------
     qubitOp : qiskit.aqua.operators.WeightedPauliOperator
         Qiskit representation of the qubit Hamiltonian
-    BLANK : None
-        Blank to match returns of chemistry functions
-    BLANK : None
-        Blank to match returns of chemistry functions
     BLANK : 0.
         Blank to match returns of chemistry functions
     """
 
     pauli_terms = []
+
     # ZZ terms
-    pauli_terms += [ (J,Pauli.from_label('I'*(i)+'ZZ'+'I'*((N-1)-(i+1)))) for i in range(N-1) ]
+    pauli_terms += [ (-J,Pauli.from_label('I'*(i)+'ZZ'+'I'*((N-1)-(i+1)))) for i in range(N-1) ]
     # optional periodic boundary condition term
     if pbc:
-        pauli_terms += [ (J,Pauli.from_label('Z'+'I'*(N-2)+'Z')) ]
+        pauli_terms += [ (-J,Pauli.from_label('Z'+'I'*(N-2)+'Z')) ]
+    
+    # for B*J<1 the ground state is degenerate, can optionally lift that degeneracy with a 
+    # small Z field
+    if resolve_degeneracy:
+        pauli_terms += [ (np.min([J,B])*1E-3,Pauli.from_label('I'*(i)+'Z'+'I'*(N-(i+1)))) for i in range(N) ]
+    
     # X terms
-    pauli_terms += [ (B,Pauli.from_label('I'*(i)+'X'+'I'*(N-(i+1)))) for i in range(N) ]
+    pauli_terms += [ (-B,Pauli.from_label('I'*(i)+'X'+'I'*(N-(i+1)))) for i in range(N) ]
 
     qubitOp = wpo(pauli_terms)
 
-    return qubitOp,None,None,0.
-
+    return qubitOp,0.
 
 def run_BO_vqe(
     dist,
@@ -323,13 +322,8 @@ def run_BO_vqe(
 
 def run_BO_vqe_parallel(
     phys_params,
-    depth,
-    molecule='H2',
-    N=None,
-    J=None,
-    pbc=None,
-    ansatz_type='xyz',
-    seed=None,
+    get_qubit_op,
+    ansatz,
     info_sharing_mode='shared',
     nb_iter=30,
     nb_init='max',
@@ -340,37 +334,26 @@ def run_BO_vqe_parallel(
     optimization_level=3,
     verbose=False,
     dump_results=False,
-    results_directory='.',
-    xyzpy_max_nb_params=None,
-    **kwargs,
     ):
     """ 
-    Run the BO VQE algorithm, parallelised over different nuclear separations
+    Run the BO VQE algorithm, parallelised over different physical parameter values. It 
+    has different information sharing modes, documented below under `info_sharing_mode`
 
     Parameters
     ----------
     phys_params : array
         The set of physical parameters to run the BO VQE for. In the chemistry case this
         is the nuclear separations, for TFIM it is the set of B values
-    depth : int
-        The ansatz depth
-
-    molecule : {'H2', 'LiH', 'TFIM'}
-        The physical system to run the BO VQE for
-    N : None or int
-        This will be ignored for molecules, needed for TFIM generator
-    J : None or float
-        This will be ignored for molecules, optionally passed to TFIM generator
-    pbc : None or boolean
-        This will be ignored for molecules, optionally passed to TFIM generator
-
-    ansatz_type : {'xyz', 'u3', 'random'}
-        Ansatz type, refers to the classes in the ansatz module
-    seed : int, optional 
-        Passed to the random ansatz constructor for reproducibility
+    get_qubit_op : callable, (float) -> (WeightedPauliOperator,float)
+        Generates the qubit Hamiltonian as well as any energy shift that is missing from the
+        qubit Hamiltonian (could be added back as a identity Pauli string). The chemistry
+        functions above, e.g. `get_H2_qubit_op` would be an example
+    ansatz : ParameterisedAnsatz object
+        The variational ansatz object, an instance of a subclass of ParameterisedAnsatz 
     
     info_sharing_mode : {'shared','random','left','right'}
         (BO) This controls the evaluation sharing of the BO instances, cases:
+            'independent' : The BO do not share data, each only recieves its own evaluations
             'shared' :  Each BO obj gains access to evaluations of all of the others. 
             'random1' : The BO do not get the evaluations others have requested, but in 
                 addition to their own they get an equivalent number of randomly chosen 
@@ -410,15 +393,6 @@ def run_BO_vqe_parallel(
         Set level of output of the function
     dump_results : bool, default False
         Flag for whether or not to dump the accumulated results objs
-    results_directory : string (optional)
-        Set a relative path to the directory to be used for dumping results objs
-
-    xyzpy_max_nb_params : None or int, (hack)
-        (xyzpy) Number of params varies with ansatz depth, this conflicts with the xarrays
-        used to store output if the Returns includes the optimal parameter set. This pads
-        the number of parameters out to some max
-    **kwargs : additional kwargs
-        (xyzpy) This is mostly here to allow additional fields to be added in xyzpy
 
     Returns
     -------
@@ -432,42 +406,18 @@ def run_BO_vqe_parallel(
         due to the BO's lack of confidence about its optimal
     optimal_params : array, shape=(len(phys_params),nb_params)
         Optimal parameter sets found for each separation
-    results_dump_filename : None, or string
-        If `dump_results` is set to True this will return the relative filepath of the
-        location the results have been dumped to
+    accumulated_results : list
+        If `dump_results` is set to True this will return the accumulated results dicts
+        from the BO, else it will be an empty list
     """
 
     # to save results sets
     accumulated_results = []
-    
-    # parse molecule name argument
-    if molecule=='H2':
-        get_qubit_op = get_H2_qubit_op
-    elif molecule=='LiH':
-        get_qubit_op = get_LiH_qubit_op
-    elif molecule=='TFIM':
-        # check we have N, J, pbc args (N is essential, J and pbc are optional args of
-        # get_TFIM_qubit_op, if they are None here we do not pass them to preserve the
-        # defaults of get_TFIM_qubit_op)
-        if not isinstance(N,(int,np.integer)):
-            print('TFIM generator was passed invalid N arg: '+f'{N}',file=sys.stderr)
-            raise ValueError
-        _tfim_wrapper_args = {}
-        if not J is None:
-            _tfim_wrapper_args['J'] = J
-        if not pbc is None:
-            _tfim_wrapper_args['pbc'] = pbc
-        # make get_qubit_op func by wrapping get_TFIM_qubit_op function
-        def get_qubit_op(B):
-            return get_TFIM_qubit_op(N,B,**_tfim_wrapper_args)
-    else:
-        print('Molecule not recognised, please choose "H2", "LiH" or "TFIM".',file=sys.stderr)
-        raise ValueError
 
     # check the information sharing arg is recognised
-    if not info_sharing_mode in ['shared','random1','random2','left','right']:
+    if not info_sharing_mode in ['independent','shared','random1','random2','left','right']:
         print('BO information sharing mode '+f'{info_sharing_mode}'+' not recognised, please choose: '
-            +'"shared", "random1", "random2", "left" or "right".',file=sys.stderr)
+            +'"independent", "shared", "random1", "random2", "left" or "right".',file=sys.stderr)
         raise ValueError
 
     # make qubit ops
@@ -476,18 +426,8 @@ def run_BO_vqe_parallel(
     # group pauli operators for measurement
     qubit_ops = [ TPBGroupedWeightedPauliOperator.unsorted_grouping(op) for op in qubit_ops ]
                 
-    # make ansatz
-    n = qubit_ops[0].num_qubits
-    if ansatz_type == 'random':
-        ansatz = RandomAnsatz(n,depth,seed=seed)
-    elif ansatz_type == 'xyz':
-        ansatz = RegularXYZAnsatz(n,depth)
-    elif ansatz_type == 'u3':
-        ansatz = RegularU3Ansatz(n,depth) 
-    else:
-        print('ansatz_type '+f'{ansatz_type}'+' not recognised, please choose:'
-            +'"xyz", "u3" or "random"',file=sys.stderr)
-        raise ValueError
+    # ensure the ansatz and qubit Hamiltonians have same number of qubits
+    assert qubit_ops[0].num_qubits==ansatz.num_qubits
 
     # create quantum instances
     if (backend_name[:4]=='ibmq'):
@@ -651,7 +591,12 @@ def run_BO_vqe_parallel(
                         or ((info_sharing_mode=='left') and (boidx<pidx))
                         or ((info_sharing_mode=='right') and (boidx>pidx))
                        ):
-                        dist = np.sqrt(np.sum((bo_eval_point-p)**2)) # L2 norm distance
+                        # distance is euclidean distance, but since the values are angles we want
+                        # to minimize the element-wise differences by optionally shifting one of 
+                        # the points by ±2\pi
+                        tmp = np.minimum((bo_eval_point-p)**2,((bo_eval_point+2*np.pi)-p)**2)
+                        tmp = np.minimum(tmp,((bo_eval_point-2*np.pi)-p)**2)
+                        dist = np.sqrt(np.sum(tmp))
                         # generate random vector in N-d space then scale it to have length we want, 
                         # using 'Hypersphere Point Picking' Gaussian approach
                         random_displacement = np.random.normal(size=ansatz.nb_params)
@@ -663,7 +608,7 @@ def run_BO_vqe_parallel(
                         circ_name_to_x_map[_circ_name] = bo_eval_point+random_displacement
 
         # sense check on number of circuits generated
-        if info_sharing_mode=='shared':
+        if info_sharing_mode in ['independent','shared']:
             assert len(circuit_name_prefixes)==len(phys_params)
         elif info_sharing_mode in ['random1','random2']:
             assert len(circuit_name_prefixes)==len(phys_params)**2
@@ -676,7 +621,9 @@ def run_BO_vqe_parallel(
         # iterate over the BO obj's passing them all the correctly weighted data
         for idx,(bo,qo) in enumerate(zip(Bopts,qubit_ops)):
 
-            if info_sharing_mode=='shared':
+            if info_sharing_mode=='independent':
+                _pull_from = [ str(idx)+'-base' ]
+            elif info_sharing_mode=='shared':
                 _pull_from = [ str(i)+'-base' for i in range(len(phys_params)) ]
             elif info_sharing_mode in ['random1','random2']:
                 _pull_from = ([ str(idx)+'-base' ]
@@ -688,7 +635,8 @@ def run_BO_vqe_parallel(
                 _pull_from = ([ str(i)+'-base' for i in range(idx,len(phys_params)) ] 
                     + [ str(idx)+'-'+str(i) for i in range(idx) ])
 
-            assert len(_pull_from)==len(phys_params) # sense check
+            if not info_sharing_mode=='independent':
+                assert len(_pull_from)==len(phys_params) # sense check
 
             Ynew = np.array([[ np.real(qo.evaluate_with_result(new_results,
                 statevector_mode=inst_bigshots.is_statevector,
@@ -728,27 +676,7 @@ def run_BO_vqe_parallel(
         BO_energies[idx] = np.real(mean)
         BO_energies_std[idx] = np.real(std)
 
-    # (optionally) pad number of params for xyzpy consistency
-    if not xyzpy_max_nb_params is None:
-        tmp = np.zeros((len(phys_params),xyzpy_max_nb_params))
-        tmp[:,:ansatz.nb_params] = Xfinal
-        Xfinal = tmp
-
-    # (optionally) dump complete results set
-    dump_filename = None
-    if dump_results:
-
-        # make directory if needed
-        import os
-        if not os.path.exists(results_directory):
-            os.makedirs(results_directory)
-
-        # create hash from the time, likely to be unique
-        dump_filename = results_directory+'/'+str(hash(time.time()))[:10]+'.json'
-        with open(dump_filename,'w+') as dump_file:
-            json.dump(accumulated_results,dump_file)
-
-    return exact_energies+shifts,BO_energies+shifts,BO_energies_std,Xfinal,dump_filename
+    return exact_energies+shifts,BO_energies+shifts,BO_energies_std,Xfinal,accumulated_results
 
 def _make_qubit_ops(phys_params,qubit_op_func):
     """
@@ -774,7 +702,7 @@ def _make_qubit_ops(phys_params,qubit_op_func):
     exact_energies = np.zeros(len(phys_params))
     shifts = np.zeros(len(phys_params))
     for idx,pp in enumerate(phys_params):
-        qubitOp,num_particles,num_spin_orbitals,shift = qubit_op_func(pp)
+        qubitOp,shift = qubit_op_func(pp)
         shifts[idx] = shift
 
         if idx>0:
