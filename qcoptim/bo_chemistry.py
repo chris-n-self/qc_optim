@@ -151,7 +151,6 @@ def get_TFIM_qubit_op(
     # optional periodic boundary condition term
     if pbc:
         pauli_terms += [ (-J,Pauli.from_label('Z'+'I'*(N-2)+'Z')) ]
-    
     # for B*J<1 the ground state is degenerate, can optionally lift that degeneracy with a 
     # small Z field
     if resolve_degeneracy:
@@ -351,7 +350,7 @@ def run_BO_vqe_parallel(
     ansatz : ParameterisedAnsatz object
         The variational ansatz object, an instance of a subclass of ParameterisedAnsatz 
     
-    info_sharing_mode : {'shared','random','left','right'}
+    info_sharing_mode : {'independent','shared','random','left','right'}
         (BO) This controls the evaluation sharing of the BO instances, cases:
             'independent' : The BO do not share data, each only recieves its own evaluations
             'shared' :  Each BO obj gains access to evaluations of all of the others. 
@@ -594,9 +593,9 @@ def run_BO_vqe_parallel(
                         # distance is euclidean distance, but since the values are angles we want
                         # to minimize the element-wise differences by optionally shifting one of 
                         # the points by ±2\pi
-                        tmp = np.minimum((bo_eval_point-p)**2,((bo_eval_point+2*np.pi)-p)**2)
-                        tmp = np.minimum(tmp,((bo_eval_point-2*np.pi)-p)**2)
-                        dist = np.sqrt(np.sum(tmp))
+                        disp_vector = np.minimum((bo_eval_point-p)**2,((bo_eval_point+2*np.pi)-p)**2)
+                        disp_vector = np.minimum(disp_vector,((bo_eval_point-2*np.pi)-p)**2)
+                        dist = np.sqrt(np.sum(disp_vector))
                         # generate random vector in N-d space then scale it to have length we want, 
                         # using 'Hypersphere Point Picking' Gaussian approach
                         random_displacement = np.random.normal(size=ansatz.nb_params)
