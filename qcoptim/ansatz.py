@@ -1,7 +1,7 @@
 
 # list of * contents
 __all__ = [
-    'ParameterisedAnsatz',
+    'BaseAnsatz',
     'RandomAnsatz',
     'RegularXYZAnsatz',
     'RegularU3Ansatz',
@@ -11,7 +11,40 @@ import random
 import qiskit as qk
 import numpy as np
 
-class ParameterisedAnsatz(object):
+from abc import ABC, abstractmethod
+
+class ParameterisedAnsatz(ABC):
+    """
+    Interface for a parameterised ansatz. Specifies an object that must have four
+    properties: a depth, a circuit, the number of qubits and the number of parameters.
+    """
+
+    @property
+    @abstractmethod
+    def depth(self):
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def params(self):
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def circuit(self):
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def num_qubits(self):
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def nb_params(self):
+        raise NotImplementedError
+
+class BaseAnsatz(ParameterisedAnsatz):
     """ """
 
     def __init__(
@@ -20,13 +53,13 @@ class ParameterisedAnsatz(object):
                  depth,
                  **kwargs
                 ):
-        self.num_qubits = num_qubits
-        self.depth = depth
+        self._num_qubits = num_qubits
+        self._depth = depth
 
         # make circuit and generate parameters
-        self.params = self._generate_params()
-        self.nb_params = len(self.params)
-        self.circuit = self._generate_circuit()
+        self._params = self._generate_params()
+        self._nb_params = len(self._params)
+        self._circuit = self._generate_circuit()
 
     def _generate_params(self):
         """ To be implemented in the subclasses """
@@ -36,7 +69,27 @@ class ParameterisedAnsatz(object):
         """ To be implemented in the subclasses """
         raise NotImplementedError
 
-class RandomAnsatz(ParameterisedAnsatz):
+    @property
+    def depth(self):
+        return self._depth
+
+    @property
+    def circuit(self):
+        return self._circuit
+
+    @property
+    def params(self):
+        return self._params
+
+    @property
+    def num_qubits(self):
+        return self._num_qubits
+
+    @property
+    def nb_params(self):
+        return self._nb_params
+
+class RandomAnsatz(BaseAnsatz):
     """ """
 
     def __init__(self,*args,
@@ -56,7 +109,7 @@ class RandomAnsatz(ParameterisedAnsatz):
 
     def _generate_params(self):
         """ """
-        nb_params = 2*(self.num_qubits-1)*self.depth + self.num_qubits
+        nb_params = 2*(self._num_qubits-1)*self._depth + self._num_qubits
         name_params = ['R'+str(i) for i in range(nb_params)]
         return [qk.circuit.Parameter(n) for n in name_params]
 
@@ -64,17 +117,17 @@ class RandomAnsatz(ParameterisedAnsatz):
         """ """
 
         # the set number of entangling pairs to distribute randomly
-        ent_pairs = [(i, i + 1) for i in range(self.num_qubits - 1) for _ in range(self.depth)]
+        ent_pairs = [(i, i + 1) for i in range(self._num_qubits - 1) for _ in range(self._depth)]
         random.shuffle(ent_pairs)
         
         # keep track of where not to apply a entangling gate again
         just_entangled = set()
             
         # keep track of where its worth putting a parameterised gate
-        needs_rgate = [True] * self.num_qubits
+        needs_rgate = [True] * self._num_qubits
 
         # make circuit obj and list of parameter obj's created
-        qc = qk.QuantumCircuit(self.num_qubits)
+        qc = qk.QuantumCircuit(self._num_qubits)
 
         # parse entangling gate arg
         if self.gate2=='CZ':
@@ -94,9 +147,9 @@ class RandomAnsatz(ParameterisedAnsatz):
 
         # consume list of pairs to entangle
         while ent_pairs:
-            for i in range(self.num_qubits):
+            for i in range(self._num_qubits):
                 if needs_rgate[i]:
-                    (single_qubit_gates[random.randint(0,2)])(self.params[param_counter],i)
+                    (single_qubit_gates[random.randint(0,2)])(self._params[param_counter],i)
                     param_counter += 1
                     needs_rgate[i] = False
                     
@@ -111,26 +164,26 @@ class RandomAnsatz(ParameterisedAnsatz):
             just_entangled.discard((i + 1, j + 1))
             needs_rgate[i] = needs_rgate[j] = True
         
-        for i in range(self.num_qubits):
+        for i in range(self._num_qubits):
             if needs_rgate[i]:
-                (single_qubit_gates[random.randint(0,2)])(self.params[param_counter],i)
+                (single_qubit_gates[random.randint(0,2)])(self._params[param_counter],i)
                 param_counter += 1
         
         return qc
 
-class RegularXYZAnsatz(ParameterisedAnsatz):
+class RegularXYZAnsatz(BaseAnsatz):
     """ """
 
     def _generate_params(self):
         """ """
-        nb_params = self.num_qubits*(self.depth+1)
+        nb_params = self._num_qubits*(self._depth+1)
         name_params = ['R'+str(i) for i in range(nb_params)]
         return [qk.circuit.Parameter(n) for n in name_params]
 
     def _generate_circuit(self):
         """ """
 
-        N = self.num_qubits
+        N = self._num_qubits
         barriers = True
         
         qc = qk.QuantumCircuit(N)
@@ -155,12 +208,12 @@ class RegularXYZAnsatz(ParameterisedAnsatz):
             qc.barrier()
         
         param_counter = 0
-        for r in range(self.depth):
+        for r in range(self._depth):
 
             # add parameterised single qubit rotations
             for q in range(N):
                 gate = single_qubit_gate_sequence[r % len(single_qubit_gate_sequence)]
-                gate(self.params[param_counter],q)
+                gate(self._params[param_counter],q)
                 param_counter += 1
 
             # add entangling gates
@@ -179,25 +232,25 @@ class RegularXYZAnsatz(ParameterisedAnsatz):
         
         # add final round of parameterised single qubit rotations
         for q in range(N):
-            gate = single_qubit_gate_sequence[self.depth % len(single_qubit_gate_sequence)]
-            gate(self.params[param_counter],q)
+            gate = single_qubit_gate_sequence[self._depth % len(single_qubit_gate_sequence)]
+            gate(self._params[param_counter],q)
             param_counter += 1
 
         return qc
 
-class RegularU3Ansatz(ParameterisedAnsatz):
+class RegularU3Ansatz(BaseAnsatz):
     """ """
 
     def _generate_params(self):
         """ """
-        nb_params = self.num_qubits*(self.depth+1)*3
+        nb_params = self._num_qubits*(self._depth+1)*3
         name_params = ['R'+str(i) for i in range(nb_params)]
         return [qk.circuit.Parameter(n) for n in name_params]
 
     def _generate_circuit(self):
         """ """
 
-        N = self.num_qubits
+        N = self._num_qubits
         barriers = True
         
         qc = qk.QuantumCircuit(N)
@@ -205,11 +258,11 @@ class RegularU3Ansatz(ParameterisedAnsatz):
         egate = qc.cx # entangle with CNOTs
 
         param_counter = 0
-        for r in range(self.depth):
+        for r in range(self._depth):
 
             # add parameterised single qubit rotations
             for q in range(N):
-                qc.u3(*[self.params[param_counter+i] for i in range(3)],q)
+                qc.u3(*[self._params[param_counter+i] for i in range(3)],q)
                 param_counter += 3
 
             # add entangling gates
@@ -228,7 +281,7 @@ class RegularU3Ansatz(ParameterisedAnsatz):
 
         # add final round of parameterised single qubit rotations
         for q in range(N):
-            qc.u3(*[self.params[param_counter+i] for i in range(3)],q)
+            qc.u3(*[self._params[param_counter+i] for i in range(3)],q)
             param_counter += 3
         
         return qc
